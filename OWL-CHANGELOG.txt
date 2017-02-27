@@ -1,2 +1,2 @@
 2017.01.11:
-        - forked from sakaicontrib/turnitin
+        - copied from https://github.com/sakaicontrib/turnitin/tree/master
