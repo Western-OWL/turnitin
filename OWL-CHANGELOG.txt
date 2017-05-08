@@ -1,3 +1,5 @@
+2017.05.08:
+	- [OWL-2444] change log level to DEBUG when can't find/access contentreview_item in SubmissionCallbackServlet
 2017.05.05:
 	- [OWL-2662] delete contentreview_items during queue job if associated assignment has been deleted
 	- [OWL-2627] delete contentreview_items during queue job if associated assignment is no longer set to use content review
