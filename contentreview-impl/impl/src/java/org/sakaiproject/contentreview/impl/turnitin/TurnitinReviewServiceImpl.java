@@ -511,7 +511,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 		ContentReviewItem item = (ContentReviewItem) matchingItems.iterator().next();
 		if (item.getStatus().compareTo(ContentReviewItem.SUBMITTED_REPORT_AVAILABLE_CODE) != 0) {
 			log.debug("Report not available: " + item.getStatus());
-			throw new ReportException("Report not available: " + item.getStatus());
+			throw new ReportException("Report not available for contentreview_item <" + item.getId() + ">, status = " + item.getStatus());
 		}
 
 		// report is available - generate the URL to display
@@ -557,7 +557,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 		ContentReviewItem item = (ContentReviewItem) matchingItems.iterator().next();
 		if (item.getStatus().compareTo(ContentReviewItem.SUBMITTED_REPORT_AVAILABLE_CODE) != 0) {
 			log.debug("Report not available: " + item.getStatus());
-			throw new ReportException("Report not available: " + item.getStatus());
+			throw new ReportException("Report not available for contentreview_item <" + item.getId() + ">, status = " + item.getStatus());
 		}
 
 
@@ -619,7 +619,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 		}
 		if (item.getStatus().compareTo(ContentReviewItem.SUBMITTED_REPORT_AVAILABLE_CODE) != 0) {
 			log.debug("Report not available: " + item.getStatus());
-			throw new ReportException("Report not available: " + item.getStatus());
+			throw new ReportException("Report not available for contentreview_item <" + item.getId() + ">, status = " + item.getStatus());
 		}
 		
 		return getLTIReportAccess(item);

@@ -1,5 +1,6 @@
 2017.05.19:
         - [OWL-2665] display appropriate text for items pending originality reports on due date
+	- [OWL-2828] reduce logging output for TII report not available
 2017.05.08:
 	- [OWL-2444] change log level to DEBUG when can't find/access contentreview_item in SubmissionCallbackServlet
 2017.05.05:
