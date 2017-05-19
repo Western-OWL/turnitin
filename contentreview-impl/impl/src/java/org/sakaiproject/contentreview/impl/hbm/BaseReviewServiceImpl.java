@@ -28,6 +28,7 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.hibernate.exception.ConstraintViolationException;
+import org.sakaiproject.assignment.api.AssignmentSubmission;
 import org.sakaiproject.content.api.ContentResource;
 import org.sakaiproject.contentreview.dao.impl.ContentReviewDao;
 import org.sakaiproject.contentreview.exception.QueueException;
@@ -37,6 +38,8 @@ import org.sakaiproject.contentreview.model.ContentReviewActivityConfigEntry;
 import org.sakaiproject.contentreview.model.ContentReviewItem;
 import org.sakaiproject.contentreview.service.ContentReviewService;
 import org.sakaiproject.contentreview.service.ContentReviewSiteAdvisor;
+import org.sakaiproject.contentreview.turnitin.TurnitinConstants;
+import org.sakaiproject.entity.api.ResourceProperties;
 import org.sakaiproject.genericdao.api.search.Order;
 import org.sakaiproject.genericdao.api.search.Restriction;
 import org.sakaiproject.genericdao.api.search.Search;
@@ -487,5 +490,46 @@ public abstract class BaseReviewServiceImpl implements ContentReviewService {
 		}
 
 		return false;
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	public long getEffectiveDueDate(String assignmentID, long assignmentDueDate, ResourceProperties assignmentProperties, int dueDateBuffer) {
+		long dueDateMillis = assignmentDueDate;
+		if (assignmentProperties != null ) {
+			String strResubmitCloseTime = assignmentProperties.getProperty(AssignmentSubmission.ALLOW_RESUBMIT_CLOSETIME);
+			if (!StringUtils.isBlank(strResubmitCloseTime)) {
+				try {
+					// If the resubmit close time is after the close time, it effectively becomes the due date (on the TII side)
+					long resubmitCloseTime = Long.parseLong(strResubmitCloseTime);
+					if (resubmitCloseTime > dueDateMillis) {
+						dueDateMillis = resubmitCloseTime;
+					}
+				} catch (NumberFormatException ex) {
+					log.warn("NumberFormatException thrown when parsing the resubmitCloseTime: " + strResubmitCloseTime);
+				}
+			}
+		}
+
+		// If we've previously saved the date for a manually allowed student resubmission (extension), and it's after the previously
+		// determined effective due date, the extension then becomes the effective due date
+		String strLatestExtensionDate = getActivityConfigValue( TurnitinConstants.TURNITIN_ASN_LATEST_INDIVIDUAL_EXTENSION_DATE,
+														 TurnitinConstants.SAKAI_ASSIGNMENT_TOOL_ID, assignmentID,
+														 TurnitinConstants.PROVIDER_ID );
+		if (StringUtils.isNotBlank(strLatestExtensionDate)) {
+			try {
+				long latestExtensionDate = Long.parseLong(strLatestExtensionDate);
+				if (latestExtensionDate > dueDateMillis) {
+					dueDateMillis = latestExtensionDate;
+				}
+			} catch (NumberFormatException ex) {
+				log.warn("NumberFormatException thrown when parsing the latest extension date: " + strLatestExtensionDate);
+			}
+		}
+
+		// Push the due date by the necessary padding
+		dueDateMillis += dueDateBuffer * 60000;
+		return dueDateMillis;
 	}
 }

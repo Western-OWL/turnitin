@@ -612,6 +612,11 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 
 		// check that the report is available
 		ContentReviewItem item = (ContentReviewItem) matchingItems.iterator().next();
+		if (ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE.equals(item.getStatus())
+				|| ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE.equals(item.getStatus())) {
+			log.debug("Report pending for item: " + item.getId());
+			return "Pending";
+		}
 		if (item.getStatus().compareTo(ContentReviewItem.SUBMITTED_REPORT_AVAILABLE_CODE) != 0) {
 			log.debug("Report not available: " + item.getStatus());
 			throw new ReportException("Report not available: " + item.getStatus());
@@ -1795,7 +1800,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 				if (latestExtensionDate > timestampDue)
 				{
 					// push the due date to the latest extension date
-					extraAsnOpts.put("timestampDue", Long.valueOf(latestExtensionDate));
+					extraAsnOpts.put("timestampDue", latestExtensionDate);
 				}
 			}
 			catch (NumberFormatException nfe)
@@ -2010,13 +2015,13 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 			catch (IdUnusedException e)
 			{
 				// If the assignment no longer exists, delete the contentreview_item and continue to next iteration
-				log.warn("No assignment with ID = " + currentItem.getTaskId() + ", deleting contentreview_item", e);
+				log.warn("No assignment with ID = " + currentItem.getTaskId() + ", deleting contentreview_item");
 				dao.delete(currentItem);
 				continue;
 			}
 			catch (PermissionException e)
 			{
-				log.warn("No permission for assignment with ID = " + currentItem.getTaskId(), e);
+				log.warn("No permission for assignment with ID = " + currentItem.getTaskId());
 			}
 
 			// If associated assignment does not have content review enabled, delete the contentreview_item and continue to next iteration
@@ -2048,7 +2053,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 				user = userDirectoryService.getUser(currentItem.getUserId());
 			} catch (UserNotDefinedException e1) {
 				log.error("Submission attempt unsuccessful - User not found.", e1);
-				processError(currentItem, ContentReviewItem.SUBMISSION_ERROR_NO_RETRY_CODE, null, null);
+				processError(currentItem, ContentReviewItem.SUBMISSION_ERROR_NO_RETRY_CODE, "User not found", null);
 				errors++;
 				continue;
 			}
@@ -2184,9 +2189,10 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 				TurnitinReturnValue result = new TurnitinReturnValue();
 				result.setResult( -1 );
 				boolean isResubmission = false;
-				if(currentItem.isResubmission())
+				AssignmentContent ac = null;
+				if(a != null && currentItem.isResubmission())
 				{
-					AssignmentContent ac = a.getContent();
+					ac = a.getContent();
 					// Resubmit only for submission types that allow only one file per submission
 					String tiiPaperId = currentItem.getExternalId();
 					// 1 - inline, 2 - attach, 3 - both, 4 - non elec, 5 - single file
@@ -2206,7 +2212,18 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 					log.debug("LTI submission successful");
 					//problems overriding this on callback
 					//currentItem.setExternalId(externalId);
-					currentItem.setStatus(ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE);
+
+					if(ac == null && a != null) {
+						ac = a.getContent();
+					}
+
+					// If assignment set to generate reports on due date, set status appropriately
+					if(ac != null && TurnitinConstants.GEN_REPORTS_ON_DUE_DATE_SETTING.equals(ac.getGenerateOriginalityReport())) {
+						currentItem.setStatus(ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE);
+					} else {
+						currentItem.setStatus(ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE);
+					}
+
 					currentItem.setRetryCount(Long.valueOf(0));
 					currentItem.setLastError(null);
 					currentItem.setErrorCode(null);
@@ -2507,6 +2524,12 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 				new Object[] { ContentReviewItem.REPORT_ERROR_RETRY_CODE, "" },
 				new int[] { dao.EQUALS, dao.NOT_NULL }));
 
+		// Iterate through all items in status 10 (report pending, generated on due date)
+		awaitingReport.addAll(dao.findByProperties(ContentReviewItem.class,
+				new String[] { "status", "externalId" },
+				new Object[] { ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE, "" },
+				new int[] { dao.EQUALS, dao.NOT_NULL }));
+
 		Iterator<ContentReviewItem> listIterator = awaitingReport.iterator();
 		HashMap<String, Integer> reportTable = new HashMap<>();
 
@@ -2518,9 +2541,33 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 
 			try
 			{
+				AssignmentContent assignmentContent = null;
+				try {
+					org.sakaiproject.assignment.api.Assignment assignment = assignmentService.getAssignment(currentItem.getTaskId());
+					if (assignment != null) {
+						assignmentContent = assignment.getContent();
+
+						// If the assignment is set to generate reports on the due date, and the effective due date is in the future,
+						// skip to next item without incrementing retry count
+						if (ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE.equals(currentItem.getStatus())) {
+							int dueDateBuffer = serverConfigurationService.getInt("contentreview.due.date.queue.job.buffer.minutes", 0);
+							if (System.currentTimeMillis() < getEffectiveDueDate(currentItem.getTaskId(), assignment.getCloseTime().getTime(), assignment.getProperties(), dueDateBuffer)) {
+								continue;
+							}
+						}
+					}
+				} catch (IdUnusedException | PermissionException e) {
+					// If the assignment no longer exists or if there was a permission exception, increment the item's retry count and skip to next item
+					String errorMsg = "Cant get assignment by taskID = " + currentItem.getTaskId() + ", skipping to next item";
+					log.warn(errorMsg, e);
+					incrementRetryCountAndProcessError(currentItem, currentItem.getStatus(), errorMsg, null);
+					continue;
+				}
+
 				// has the item reached its next retry time?
-				if (currentItem.getNextRetryTime() == null)
+				if (currentItem.getNextRetryTime() == null) {
 					currentItem.setNextRetryTime(new Date());
+				}
 
 				else if (currentItem.getNextRetryTime().after(new Date())) {
 					//we haven't reached the next retry time
@@ -2536,13 +2583,15 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 					processError( currentItem, ContentReviewItem.SUBMISSION_ERROR_RETRY_EXCEEDED, null, null );
 					continue;
 				} else {
-					log.debug("Still have retries left, continuing. ItemID: " + currentItem.getId());
-					// Moving down to check for report generate speed.
-					//long l = currentItem.getRetryCount().longValue();
-					//l++;
-					//currentItem.setRetryCount(Long.valueOf(l));
-					//currentItem.setNextRetryTime(this.getNextRetryTime(Long.valueOf(l)));
-					//dao.update(currentItem);
+					// If associated assignment does not have content review enabled, increment the item's retry count and skip to next item
+					if (assignmentContent != null && !assignmentContent.getAllowReviewService()) {
+						String errorMsg = "Assignment with ID = " + currentItem.getTaskId() + " does not have content review enabled; skipping to next item";
+						log.warn(errorMsg);
+						incrementRetryCountAndProcessError(currentItem, currentItem.getStatus(), errorMsg, null);
+						continue;
+					} else {
+						log.debug("Still have retries left, continuing. ItemID: " + currentItem.getId());
+					}
 				}
 				
 				Site s;
@@ -2550,13 +2599,9 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 					s = siteService.getSite(currentItem.getSiteId());
 				}
 				catch (IdUnusedException iue) {
-					log.warn("checkForReportsBulk: Site " + currentItem.getSiteId() + " not found!" + iue.getMessage());
-					long l = currentItem.getRetryCount();
-					l++;
-					currentItem.setRetryCount(l);
-					currentItem.setNextRetryTime(this.getNextRetryTime(l));
-					currentItem.setLastError("Site not found");
-					dao.update(currentItem);
+					String errorMsg = "Site " + currentItem.getSiteId() + " not found!";
+					log.warn( errorMsg + iue.getMessage());
+					incrementRetryCountAndProcessError(currentItem, currentItem.getStatus(), errorMsg, null);
 					continue;
 				}
 				//////////////////////////////  NEW LTI INTEGRATION  ///////////////////////////////
@@ -2570,14 +2615,9 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 					String paperId = currentItem.getExternalId();
 					
 					if(paperId == null){
-						log.warn("Could not find TII paper id for the content " + currentItem.getContentId());
-						long l = currentItem.getRetryCount();
-						l++;
-						currentItem.setRetryCount(l);
-						currentItem.setNextRetryTime(this.getNextRetryTime(l));
-						currentItem.setLastError("Could not find TII paper id for the submission");
-						dao.update(currentItem);
-						continue;
+						String errorMsg = "Could not find TII paper id for the content " + currentItem.getContentId();
+						log.warn(errorMsg);
+						incrementRetryCountAndProcessError(currentItem, currentItem.getStatus(), errorMsg, null);
 					}
 					
 					TurnitinReturnValue result = tiiUtil.makeLTIcall(TurnitinLTIUtil.INFO_SUBMISSION, paperId, ltiProps);
@@ -2607,20 +2647,24 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 						log.debug("new report received: " + paperId + " -> " + currentItem.getReviewScore());
 					} else {
 						if(result.getResult() == -7){
-							log.debug("report is still pending for paper " + paperId);
-							currentItem.setStatus(ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE);
-							currentItem.setLastError( result.getErrorMessage() );
-							currentItem.setErrorCode( result.getResult() );
+							// If assignment set to generate reports on due date, set status appropriately
+							String errorMsg;
+							if(assignmentContent != null && TurnitinConstants.GEN_REPORTS_ON_DUE_DATE_SETTING.equals(
+									assignmentContent.getGenerateOriginalityReport())) {
+								currentItem.setStatus(ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE);
+								errorMsg = "Report is still pending for paper " + paperId + "; will be generated on due date";
+							} else {
+								currentItem.setStatus(ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE);
+								errorMsg = "Report is still pending for paper " + paperId;
+							}
+
+							log.debug(errorMsg);
+							processError(currentItem, currentItem.getStatus(), result.getErrorMessage(), result.getResult());
 						} else {
-							log.error("Error making LTI call");
-							long l = currentItem.getRetryCount();
-							l++;
-							currentItem.setRetryCount(l);
-							currentItem.setNextRetryTime(this.getNextRetryTime(l));
-							currentItem.setStatus(ContentReviewItem.REPORT_ERROR_RETRY_CODE);
-							currentItem.setLastError("Report Data Error: " + result.getResult());
+							String errorMsg = "Error making LTI call; report data error: " + result.getResult();
+							log.error(errorMsg);
+							incrementRetryCountAndProcessError(currentItem, ContentReviewItem.REPORT_ERROR_RETRY_CODE, errorMsg, null);
 						}
-						dao.update(currentItem);
 					}
 					
 					continue;
@@ -2628,7 +2672,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 				//////////////////////////////  OLD API INTEGRATION  ///////////////////////////////
 
 				if (currentItem.getExternalId() == null || currentItem.getExternalId().equals("")) {
-					currentItem.setStatus(Long.valueOf(4));
+					currentItem.setStatus(ContentReviewItem.SUBMISSION_ERROR_RETRY_CODE);
 					dao.update(currentItem);
 					continue;
 				}
@@ -2695,20 +2739,13 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 								log.info("Report generate speed is 2, skipping for now. ItemID: " + currentItem.getId());
 								// If there was previously a transient error for this item, reset the status
 								if (ContentReviewItem.REPORT_ERROR_RETRY_CODE.equals(currentItem.getStatus())) {
-									currentItem.setStatus(ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE);
-									currentItem.setLastError(null);
-									currentItem.setErrorCode(null);
-									dao.update(currentItem);
+									processError(currentItem, ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE, null, null);
 								}
 								continue;
 							}
 							else {
 								log.debug("Incrementing retry count for currentItem: " + currentItem.getId());
-								long l = currentItem.getRetryCount();
-								l++;
-								currentItem.setRetryCount(l);
-								currentItem.setNextRetryTime(this.getNextRetryTime(l));
-								dao.update(currentItem);
+								incrementRetryCountAndProcessError(currentItem, currentItem.getStatus(), null, null);
 							}
 						}
 					} catch (SubmissionException | TransientSubmissionException e) {
@@ -2734,16 +2771,12 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 					}
 					catch (TransientSubmissionException e) {
 						log.warn("Update failed due to TransientSubmissionException error: " + e.toString(), e);
-						currentItem.setStatus(ContentReviewItem.REPORT_ERROR_RETRY_CODE);
-						currentItem.setLastError(e.getMessage());
-						dao.update(currentItem);
+						processError(currentItem, ContentReviewItem.REPORT_ERROR_RETRY_CODE, e.getMessage(), null);
 						break;
 					}
 					catch (SubmissionException e) {
 						log.warn("Update failed due to SubmissionException error: " + e.toString(), e);
-						currentItem.setStatus(ContentReviewItem.REPORT_ERROR_RETRY_CODE);
-						currentItem.setLastError(e.getMessage());
-						dao.update(currentItem);
+						processError(currentItem, ContentReviewItem.REPORT_ERROR_RETRY_CODE, e.getMessage(), null);
 						break;
 					}
 
@@ -3689,6 +3722,14 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
         return resources;
 	}
 
+	private void incrementRetryCountAndProcessError(ContentReviewItem item, Long status, String error, Integer errorCode) {
+		long l = item.getRetryCount();
+		l++;
+		item.setRetryCount(l);
+		item.setNextRetryTime(getNextRetryTime(l));
+		processError(item, status, error, errorCode);
+	}
+
 	private void processError( ContentReviewItem item, Long status, String error, Integer errorCode )
 	{
 		try
@@ -3809,4 +3850,29 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 		return id;
 	}
 
+	/**
+	 * {@inheritDoc}
+	 */
+	public void updatePendingStatusForAssignment(String assignmentRef, String generateReportsSetting) {
+		List<ContentReviewItem> toUpdate;
+		Long newStatus;
+		if (TurnitinConstants.GEN_REPORTS_ON_DUE_DATE_SETTING.equals(generateReportsSetting)) {
+			toUpdate = dao.findByProperties(ContentReviewItem.class,
+				new String[] { "taskId", "status" },
+				new Object[] { assignmentRef, ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE },
+				new int[] { dao.EQUALS, dao.EQUALS });
+			newStatus = ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE;
+		} else {
+			toUpdate = dao.findByProperties(ContentReviewItem.class,
+				new String[] { "taskId", "status" },
+				new Object[] { assignmentRef, ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE },
+				new int[] { dao.EQUALS, dao.EQUALS });
+			newStatus = ContentReviewItem.SUBMITTED_AWAITING_REPORT_CODE;
+		}
+
+		for (ContentReviewItem item : toUpdate) {
+			item.setStatus(newStatus);
+			dao.update(item);
+		}
+	}
 }
