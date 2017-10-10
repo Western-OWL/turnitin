@@ -8,6 +8,7 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import org.apache.commons.lang.StringUtils;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -31,6 +32,8 @@ import org.sakaiproject.exception.IdUnusedException;
 import org.sakaiproject.exception.InUseException;
 import org.sakaiproject.exception.PermissionException;
 import org.sakaiproject.lti.api.LTIService;
+import org.sakaiproject.tool.api.Session;
+import org.sakaiproject.tool.cover.SessionManager;
 import org.sakaiproject.turnitin.api.TurnitinLTIAPI;
 
 /** 
@@ -126,6 +129,14 @@ public class SubmissionCallbackServlet extends HttpServlet {
 		//ext_outcomes_tool_placement_url parameter can also be processed if necessary
 		SecurityService securityService = (SecurityService) ComponentManager.get(SecurityService.class);
 		SecurityAdvisor yesMan = (String userId, String function, String reference)->{return SecurityAdvice.ALLOWED;};
+		Session session = SessionManager.getCurrentSession();
+		boolean isServletSession = false;
+		if (StringUtils.isBlank(session.getUserId()))
+		{
+			isServletSession = true;
+			session.setUserId("turnitin_sub_callback");
+			session.setUserEid("turnitin_sub_callback");
+		}
 		try {
 			securityService.pushAdvisor(yesMan);
 			ContentReviewItem cri = contentReviewService.getFirstItemByContentId(submissionId);
@@ -146,6 +157,10 @@ public class SubmissionCallbackServlet extends HttpServlet {
 			response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
 		} finally {
 			securityService.popAdvisor(yesMan);
+			if (isServletSession)
+			{
+				session.invalidate();
+			}
 		}
 	}
 
