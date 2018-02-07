@@ -1299,7 +1299,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 				long timestampOpen = (Long) extraAsnnOpts.get("timestampOpen");
 				long timestampDue = (Long) extraAsnnOpts.get("timestampDue");
 				// TII-245 - add a buffer to the TII due date to give time for the process queue job
-				timestampDue += serverConfigurationService.getInt("contentreview.due.date.queue.job.buffer.minutes", 0) * 60000;
+				timestampDue += serverConfigurationService.getInt("contentreview.due.date.queue.job.buffer.minutes", 60) * 60000;
 				ZonedDateTime open = ZonedDateTime.ofInstant(Instant.ofEpochMilli(timestampOpen), ZoneOffset.UTC);
 				ZonedDateTime due = ZonedDateTime.ofInstant(Instant.ofEpochMilli(timestampDue), ZoneOffset.UTC);
 				// Turnitin requires dates in ISO8601 format. The example from their documentation is "2014-12-10T07:43:43Z".
@@ -2550,7 +2550,7 @@ public class TurnitinReviewServiceImpl extends BaseReviewServiceImpl {
 						// If the assignment is set to generate reports on the due date, and the effective due date is in the future,
 						// skip to next item without incrementing retry count
 						if (ContentReviewItem.SUBMITTED_REPORT_ON_DUE_DATE_CODE.equals(currentItem.getStatus())) {
-							int dueDateBuffer = serverConfigurationService.getInt("contentreview.due.date.queue.job.buffer.minutes", 0);
+							int dueDateBuffer = serverConfigurationService.getInt("contentreview.due.date.queue.job.buffer.minutes", 60);
 							if (System.currentTimeMillis() < getEffectiveDueDate(currentItem.getTaskId(), assignment.getCloseTime().getTime(), assignment.getProperties(), dueDateBuffer)) {
 								continue;
 							}
