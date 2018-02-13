@@ -181,7 +181,7 @@ public class TurnitinImplTest extends AbstractJUnit4SpringContextTests {
 		tiiService.setServerConfigurationService(M_conf);
 		expect(M_conf.getServerUrl()).andStubReturn("http://serverurl");
 		expect(M_conf.getInt("contentreview.instructions.max", 1000)).andStubReturn(1000);
-		expect(M_conf.getInt("contentreview.due.date.queue.job.buffer.minutes", 0)).andStubReturn(0);
+		expect(M_conf.getInt("contentreview.due.date.queue.job.buffer.minutes", 60)).andStubReturn(60);
 		replay(M_conf);
 		
 		M_man = createMock(SessionManager.class);
